@@ -1,0 +1,58 @@
+name: Hourly Stock + Congress Pipeline
+
+on:
+  schedule:
+    - cron: "5 * * * *"   # every hour at :05
+  workflow_dispatch:
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: false   # don't kill an in-flight run; idempotent anyway
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
+      QUIVER_API_KEY:       ${{ secrets.QUIVER_API_KEY }}
+      MOTHERDUCK_TOKEN:     ${{ secrets.MOTHERDUCK_TOKEN }}
+      DBT_PROFILES_DIR:     ${{ github.workspace }}/dbt
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Extract (bronze)
+        run: python fetch_market_data.py
+
+      - name: dbt deps + seed + build
+        working-directory: dbt
+        run: |
+          dbt seed --target prod
+          dbt build --target prod --fail-fast
+
+      - name: Build Evidence site
+        if: github.event_name != 'workflow_dispatch'
+        working-directory: evidence
+        env:
+          EVIDENCE_SOURCE__motherduck__token: ${{ secrets.MOTHERDUCK_TOKEN }}
+        run: |
+          npm ci
+          npm run sources
+          npm run build
+
+      - name: Deploy to GitHub Pages
+        if: github.event_name != 'workflow_dispatch'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: evidence/build

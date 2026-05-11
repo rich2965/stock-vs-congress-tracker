@@ -1,0 +1,45 @@
+version: 2
+
+models:
+  - name: silver_stock_prices
+    columns:
+      - name: symbol
+        tests: [not_null]
+      - name: bar_ts
+        tests: [not_null]
+      - name: close
+        tests: [not_null]
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [symbol, bar_ts]
+
+  - name: silver_congress_trades
+    columns:
+      - name: ticker
+        tests: [not_null]
+      - name: trade_date
+        tests: [not_null]
+      - name: disclosure_lag_days
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+
+  - name: gold_sector_hourly_perf
+    columns:
+      - name: sector
+        tests: [not_null]
+      - name: bar_ts
+        tests: [not_null]
+
+  - name: gold_sector_congress_buys_30d
+    columns:
+      - name: sector
+        tests: [not_null, unique]
+
+seeds:
+  - name: dim_sectors
+    columns:
+      - name: ticker
+        tests: [not_null, unique]
+      - name: sector
+        tests: [not_null]

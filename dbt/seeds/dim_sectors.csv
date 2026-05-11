@@ -1,0 +1,111 @@
+ticker,sector
+NVDA,Tech
+AAPL,Tech
+MSFT,Tech
+AVGO,Tech
+CRM,Tech
+ORCL,Tech
+ADBE,Tech
+AMD,Tech
+CSCO,Tech
+INTC,Tech
+JPM,Financials
+BRK.B,Financials
+V,Financials
+MA,Financials
+BAC,Financials
+WFC,Financials
+GS,Financials
+MS,Financials
+C,Financials
+BLK,Financials
+LLY,Health Care
+JNJ,Health Care
+UNH,Health Care
+ABBV,Health Care
+MRK,Health Care
+TMO,Health Care
+AMGN,Health Care
+PFE,Health Care
+ABT,Health Care
+DHR,Health Care
+AMZN,Consumer Disc
+TSLA,Consumer Disc
+HD,Consumer Disc
+MCD,Consumer Disc
+NKE,Consumer Disc
+LOW,Consumer Disc
+SBUX,Consumer Disc
+BKNG,Consumer Disc
+TJX,Consumer Disc
+CMG,Consumer Disc
+GOOGL,Comm Services
+META,Comm Services
+NFLX,Comm Services
+DIS,Comm Services
+TMUS,Comm Services
+VZ,Comm Services
+CMCSA,Comm Services
+T,Comm Services
+WBD,Comm Services
+CHTR,Comm Services
+CAT,Industrials
+GE,Industrials
+RTX,Industrials
+UNP,Industrials
+HON,Industrials
+LMT,Industrials
+UPS,Industrials
+DE,Industrials
+BA,Industrials
+FDX,Industrials
+WMT,Staples
+COST,Staples
+PG,Staples
+KO,Staples
+PEP,Staples
+PM,Staples
+MDLZ,Staples
+MO,Staples
+TGT,Staples
+CL,Staples
+XOM,Energy
+CVX,Energy
+COP,Energy
+SLB,Energy
+EOG,Energy
+MPC,Energy
+PSX,Energy
+VLO,Energy
+OXY,Energy
+HAL,Energy
+NEE,Utilities
+DUK,Utilities
+SO,Utilities
+CEG,Utilities
+D,Utilities
+AEP,Utilities
+SRE,Utilities
+PCG,Utilities
+EXC,Utilities
+VST,Utilities
+PLD,Real Estate
+AMT,Real Estate
+EQIX,Real Estate
+WELL,Real Estate
+SPG,Real Estate
+CCI,Real Estate
+PSA,Real Estate
+O,Real Estate
+DRE,Real Estate
+CSGP,Real Estate
+LIN,Materials
+FCX,Materials
+SHW,Materials
+APD,Materials
+ECL,Materials
+NEM,Materials
+DOW,Materials
+NUE,Materials
+CTVA,Materials
+VMC,Materials

@@ -1,0 +1,18 @@
+version: 2
+
+sources:
+  - name: bronze
+    database: stock_tracker
+    schema: bronze
+    tables:
+      - name: raw_stock_prices
+        description: "Append-only raw Alpha Vantage payloads. One row per (symbol, extracted_at)."
+        columns:
+          - name: symbol
+          - name: extracted_at
+          - name: payload
+      - name: raw_congress_trades
+        description: "Append-only raw Quiver Quant congressional trade dumps."
+        columns:
+          - name: extracted_at
+          - name: payload

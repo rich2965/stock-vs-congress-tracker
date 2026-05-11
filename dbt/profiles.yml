@@ -1,0 +1,7 @@
+stock_tracker:
+  target: prod
+  outputs:
+    prod:
+      type: duckdb
+      path: "md:stock_tracker?motherduck_token={{ env_var('MOTHERDUCK_TOKEN') }}"
+      threads: 4

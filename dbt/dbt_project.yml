@@ -1,0 +1,24 @@
+name: 'stock_tracker'
+version: '1.0.0'
+config-version: 2
+profile: 'stock_tracker'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+
+models:
+  stock_tracker:
+    silver:
+      +materialized: table
+      +schema: silver
+    gold:
+      +materialized: table
+      +schema: gold
+
+seeds:
+  stock_tracker:
+    +schema: seed
+    dim_sectors:
+      +column_types:
+        ticker: VARCHAR
+        sector: VARCHAR
