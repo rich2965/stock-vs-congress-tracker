@@ -1,13 +1,13 @@
 """
 fetch_market_data.py
-Extracts hourly OHLCV (yfinance) + Congressional trades (Capitol Trades JSON API)
+Extracts hourly OHLCV (yfinance) + Congressional trades (scraped from capitoltrades.com)
 and lands raw JSON into MotherDuck bronze tables (append-only).
 """
-import os, json, sys, time
+import os, json, sys, time, re
 from datetime import datetime, timezone, timedelta
-import requests
 import yfinance as yf
 import duckdb
+from playwright.sync_api import sync_playwright
 
 # ---- Config ----
 MD_TOKEN = os.environ["MOTHERDUCK_TOKEN"]
@@ -32,17 +32,7 @@ TICKERS = [
 
 def yf_symbol(s): return s.replace(".", "-")
 
-CT_URL = "https://bff.capitoltrades.com/trades"
 RUN_TS = datetime.now(timezone.utc).isoformat()
-
-# ---- HTTP session for Capitol Trades (yfinance manages its own) ----
-session = requests.Session()
-session.headers.update({
-    "User-Agent": UA,
-    "Accept": "application/json",
-    "Origin": "https://www.capitoltrades.com",
-    "Referer": "https://www.capitoltrades.com/",
-})
 
 # ---- MotherDuck ----
 con = duckdb.connect(f"md:{DB_NAME}?motherduck_token={MD_TOKEN}")
@@ -68,11 +58,10 @@ failed, ok = [], 0
 for i, orig in enumerate(TICKERS, 1):
     yfs = yf_symbol(orig)
     try:
-        t = yf.Ticker(yfs)   # let yfinance use its own curl_cffi session
+        t = yf.Ticker(yfs)
         hist = t.history(period="1mo", interval="1h", auto_adjust=False, raise_errors=False)
         if hist is None or hist.empty:
             failed.append(orig); continue
-
         bars = [
             {
                 "ts": idx.isoformat(),
@@ -84,10 +73,9 @@ for i, orig in enumerate(TICKERS, 1):
             }
             for idx, row in hist.iterrows()
         ]
-        payload = {"symbol": orig, "interval": "1h", "bars": bars}
         con.execute(
             "INSERT INTO bronze.raw_stock_prices VALUES (?, ?, ?);",
-            [orig, RUN_TS, json.dumps(payload)],
+            [orig, RUN_TS, json.dumps({"symbol": orig, "interval": "1h", "bars": bars})],
         )
         ok += 1
         if i % 10 == 0:
@@ -96,46 +84,88 @@ for i, orig in enumerate(TICKERS, 1):
         failed.append((orig, str(e)))
         print(f"  {orig} FAILED: {e}", file=sys.stderr)
     time.sleep(0.3)
-
 print(f"stocks: {ok}/{len(TICKERS)} ok, {len(failed)} failed")
 
-# ---- 2. Congressional trades via Capitol Trades backend API ----
-# Paginate from most-recent backwards; stop after we've covered ~45 days of trades.
-# pageSize=96 is what their UI uses; date strings are ISO so lexicographic compare is safe.
-def fetch_capitoltrades(days_back=45, max_pages=60):
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)).date().isoformat()
-    out = []
-    for page in range(1, max_pages + 1):
-        r = session.get(
-            CT_URL,
-            params={"page": page, "pageSize": 96, "sortBy": "-pubDate"},
-            timeout=60,
-        )
-        r.raise_for_status()
-        body = r.json()
-        trades = body.get("data", [])
-        if not trades:
-            break
-        out.extend(trades)
+# ---- 2. Congressional trades scraped from capitoltrades.com ----
+# We render the page with Playwright and extract each row from the rendered table.
+# Columns observed on capitoltrades.com/trades (left → right):
+#   0: Politician       (name + party + chamber as multiline text)
+#   1: Traded Issuer    (company + ticker)
+#   2: Published        ("16 Apr 2024" or "X days ago")
+#   3: Traded           ("16 Apr 2024")
+#   4: Filed after      ("3 days", "45 days", etc.)
+#   5: Owner            ("Self", "Spouse", "Joint", "Child", "Undisclosed")
+#   6: Type             ("buy", "sell", "exchange", "receive")
+#   7: Size             ("1K–15K", "15K–50K", ..., "50M+")
+#   8: Price            ("$NVDA 120.50" or "N/A")
+#
+# If Capitol Trades rearranges columns, this script will still capture *all* cell
+# text into the bronze JSON — silver decides which positions to read.
 
-        # Stop once the page's youngest trade is older than the cutoff
-        dates = [t.get("txDate") or t.get("filingDate") for t in trades]
-        dates = [d for d in dates if d]
-        if dates and max(dates) < cutoff:
-            break
-        time.sleep(0.4)
-    return out
+def parse_traded_date(s: str):
+    """'16 Apr 2024' -> ISO date string, else None."""
+    if not s: return None
+    try:
+        return datetime.strptime(s.strip(), "%d %b %Y").date().isoformat()
+    except Exception:
+        return None
+
+def scrape_capitoltrades(days_back=45, max_pages=60):
+    cutoff_iso = (datetime.now(timezone.utc) - timedelta(days=days_back)).date().isoformat()
+    all_rows = []
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+        ctx = browser.new_context(user_agent=UA, viewport={"width": 1400, "height": 1000})
+        page = ctx.new_page()
+        for pg in range(1, max_pages + 1):
+            url = f"https://www.capitoltrades.com/trades?pageSize=96&page={pg}"
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                page.wait_for_selector("table tbody tr", timeout=25000)
+            except Exception as e:
+                print(f"  page {pg} load failed: {e}", file=sys.stderr)
+                break
+
+            rows = page.evaluate("""() => {
+                return Array.from(document.querySelectorAll('table tbody tr')).map(tr => {
+                    const cells = Array.from(tr.querySelectorAll('td'));
+                    // Per cell: split innerText by newlines so multiline labels are preserved
+                    const text = cells.map(td => td.innerText.split('\\n').map(s => s.trim()).filter(Boolean));
+                    // Also pull any ticker links (Issuer cell usually has an <a href="/stocks/XYZ">)
+                    const tickerEl = tr.querySelector('a[href^="/stocks/"]');
+                    const ticker = tickerEl ? tickerEl.getAttribute('href').split('/').pop() : null;
+                    return { text, ticker };
+                });
+            }""")
+            if not rows:
+                break
+            all_rows.extend(rows)
+
+            # Stop once the most recent "Traded" date on this page is older than cutoff
+            # text[3][0] is the Traded date string
+            page_dates = []
+            for r in rows:
+                try:
+                    d = parse_traded_date(r["text"][3][0])
+                    if d: page_dates.append(d)
+                except Exception:
+                    pass
+            if page_dates and max(page_dates) < cutoff_iso:
+                print(f"  stopped at page {pg}: all trades older than {cutoff_iso}")
+                break
+            time.sleep(0.4)
+        browser.close()
+    return all_rows
 
 try:
-    trades = fetch_capitoltrades()
-    # Log one example record so we can verify the shape in the run log
+    trades = scrape_capitoltrades()
     if trades:
-        print("sample trade keys:", sorted(trades[0].keys()))
+        print("sample row:", json.dumps(trades[0])[:500])
     con.execute(
         "INSERT INTO bronze.raw_congress_trades VALUES (?, ?, ?);",
         ["capitoltrades", RUN_TS, json.dumps(trades)],
     )
-    print(f"capitoltrades: {len(trades)} trades ok")
+    print(f"capitoltrades: {len(trades)} rows scraped")
 except Exception as e:
     print(f"capitoltrades FAILED: {e}", file=sys.stderr)
 

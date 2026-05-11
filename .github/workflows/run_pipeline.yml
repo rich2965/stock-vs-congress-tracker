@@ -31,9 +31,18 @@ jobs:
       - name: Install deps
         run: |
           pip install -r requirements.txt
-          # MotherDuck requires duckdb >= 1.5.2; dbt-duckdb still pins an older
+          # MotherDuck requires duckdb >= 1.5.2; dbt-duckdb pins an older
           # duckdb transitively, so force-upgrade it after the main install.
           pip install --upgrade 'duckdb>=1.5.2'
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}
+
+      - name: Install Chromium for Playwright
+        run: python -m playwright install --with-deps chromium
 
       - name: Extract (bronze)
         run: python fetch_market_data.py

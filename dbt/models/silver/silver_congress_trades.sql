@@ -1,6 +1,15 @@
--- Flatten Capitol Trades JSON into a unified trade fact.
--- Source payload = JSON array; each element has nested `asset` and `politician` objects.
--- We code defensively (try_cast, coalesce) because the API shape can drift.
+-- Parse Capitol Trades scraped rows into a tidy trade fact.
+-- Bronze payload = JSON array of {text: [[...cell_lines...], ...], ticker: "NVDA"}
+-- Column order observed on capitoltrades.com/trades (left → right):
+--   0: Politician (multiline: name / "Republican|Democrat" / "House|Senate")
+--   1: Traded Issuer (company / ticker)
+--   2: Published date
+--   3: Traded date     ("16 Apr 2024")
+--   4: Filed after     ("3 days", "45 days", ...)
+--   5: Owner
+--   6: Type            ("buy" | "sell" | "exchange" | "receive")
+--   7: Size            ("1K–15K", "15K–50K", ..., "50M+")
+--   8: Price
 
 {{ config(materialized='table') }}
 
@@ -13,55 +22,56 @@ exploded as (
     select
         r.source,
         r.extracted_at,
-        unnest(cast(r.payload as json[])) as trade
+        unnest(cast(r.payload as json[])) as row
     from raw r
 ),
 
 parsed as (
     select
         source,
-        cast(trade -> '$._txId' as varchar) as tx_id,
 
-        -- Politician
-        trim(coalesce(trade ->> '$.politician.politicianFirstName', '')
-             || ' '
-             || coalesce(trade ->> '$.politician.politicianFamilyName', '')) as member,
-        lower(coalesce(trade ->> '$.politician.politicianType', '')) as chamber,
-        trade ->> '$.politician.politicianParty' as party,
+        -- Politician cell: line 0 = name, line 1 = party, line 2 = chamber (may vary)
+        cast(row -> '$.text[0][0]' as varchar) as member,
+        lower(cast(row -> '$.text[0][1]' as varchar)) as party,
+        lower(cast(row -> '$.text[0][2]' as varchar)) as chamber,
 
-        -- Asset
-        upper(coalesce(trade ->> '$.asset.assetTicker', '')) as ticker,
-        trade ->> '$.asset.assetType' as asset_type,
+        -- Ticker comes from the <a href="/stocks/XYZ"> attribute we captured separately
+        upper(coalesce(cast(row -> '$.ticker' as varchar),
+                       cast(row -> '$.text[1][1]' as varchar))) as ticker,
 
-        -- Transaction
-        lower(coalesce(trade ->> '$.txType', '')) as txn_type,         -- 'buy' | 'sell' | 'exchange'
-        trade ->> '$.txTypeExtended'              as txn_type_detail,  -- 'Purchase', 'Sale (Partial)', ...
-        trade ->> '$.value'                       as txn_value_band,   -- '1K–15K', '15K–50K', ...
-        trade ->> '$.owner'                       as owner,
+        -- Dates: "16 Apr 2024"
+        try_strptime(cast(row -> '$.text[2][0]' as varchar), '%d %b %Y')::date as report_date,
+        try_strptime(cast(row -> '$.text[3][0]' as varchar), '%d %b %Y')::date as trade_date,
 
-        try_cast(trade ->> '$.txDate'      as date) as trade_date,
-        try_cast(trade ->> '$.filingDate'  as date) as report_date,
+        cast(row -> '$.text[5][0]' as varchar)         as owner,
+        lower(cast(row -> '$.text[6][0]' as varchar))  as txn_type,
+        cast(row -> '$.text[7][0]' as varchar)         as txn_value_band,
 
         extracted_at
     from exploded
-    where coalesce(trade ->> '$.asset.assetType', '') = 'stock'
-      and trade ->> '$.asset.assetTicker' is not null
-      and trade ->> '$.asset.assetTicker' not in ('', '--', 'N/A')
 ),
 
--- Dedup on natural key (Capitol Trades' _txId is unique per trade); fall back to a composite key.
+filtered as (
+    select *
+    from parsed
+    where ticker is not null
+      and ticker not in ('', '--', 'N/A')
+      and trade_date is not null
+),
+
+-- Dedup by natural key (no stable txId from scrape → composite key)
 deduped as (
     select * exclude (rn) from (
         select *,
                row_number() over (
-                   partition by coalesce(tx_id, member || '|' || ticker || '|' || trade_date::varchar || '|' || txn_type)
+                   partition by member, ticker, trade_date, txn_type, txn_value_band
                    order by extracted_at desc
                ) as rn
-        from parsed
+        from filtered
     ) where rn = 1
 ),
 
--- Map Capitol Trades value bands → numeric midpoints (USD).
+-- Capitol Trades value bands → USD midpoints
 sized as (
     select
         *,
@@ -85,7 +95,6 @@ sectors as (select ticker, sector from {{ ref('dim_sectors') }})
 
 select
     s.source,
-    s.tx_id,
     s.member,
     s.chamber,
     s.party,
@@ -93,7 +102,6 @@ select
     sec.sector,
     s.owner,
     s.txn_type,
-    s.txn_type_detail,
     s.trade_date,
     s.report_date,
     date_diff('day', s.trade_date, s.report_date) as disclosure_lag_days,
@@ -103,4 +111,3 @@ select
     s.extracted_at
 from sized s
 left join sectors sec on sec.ticker = s.ticker
-where s.trade_date is not null

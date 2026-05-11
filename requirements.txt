@@ -1,6 +1,6 @@
-requests==2.32.3
 yfinance>=0.2.55
 pandas>=2.2.0
+playwright>=1.45
 dbt-core>=1.9.0
 dbt-duckdb>=1.9.0
 # duckdb is force-upgraded in the workflow to satisfy MotherDuck's >=1.5.2 floor.
