@@ -37,7 +37,8 @@ SSW_URL = "https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregat
 
 RUN_TS = datetime.now(timezone.utc).isoformat()
 
-# ---- HTTP session shared by yfinance + S3 fetches ----
+# ---- HTTP session for S3 fetches only ----
+# (yfinance >= 0.2.55 manages its own curl_cffi session and rejects requests.Session.)
 session = requests.Session()
 session.headers.update({"User-Agent": UA, "Accept": "*/*"})
 
@@ -70,7 +71,7 @@ ok = 0
 for i, orig in enumerate(TICKERS, 1):
     yfs = yf_symbol(orig)
     try:
-        t = yf.Ticker(yfs, session=session)
+        t = yf.Ticker(yfs)   # let yfinance use its own curl_cffi session
         hist = t.history(period="1mo", interval="1h", auto_adjust=False, raise_errors=False)
         if hist is None or hist.empty:
             failed.append(orig); continue
