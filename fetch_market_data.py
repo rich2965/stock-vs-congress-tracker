@@ -1,10 +1,10 @@
 """
 fetch_market_data.py
-Extracts hourly OHLCV (yfinance) + Congressional trades (House + Senate Stock Watcher S3)
+Extracts hourly OHLCV (yfinance) + Congressional trades (Capitol Trades JSON API)
 and lands raw JSON into MotherDuck bronze tables (append-only).
 """
 import os, json, sys, time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import requests
 import yfinance as yf
 import duckdb
@@ -32,15 +32,17 @@ TICKERS = [
 
 def yf_symbol(s): return s.replace(".", "-")
 
-HSW_URL = "https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json"
-SSW_URL = "https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregate/all_transactions.json"
-
+CT_URL = "https://bff.capitoltrades.com/trades"
 RUN_TS = datetime.now(timezone.utc).isoformat()
 
-# ---- HTTP session for S3 fetches only ----
-# (yfinance >= 0.2.55 manages its own curl_cffi session and rejects requests.Session.)
+# ---- HTTP session for Capitol Trades (yfinance manages its own) ----
 session = requests.Session()
-session.headers.update({"User-Agent": UA, "Accept": "*/*"})
+session.headers.update({
+    "User-Agent": UA,
+    "Accept": "application/json",
+    "Origin": "https://www.capitoltrades.com",
+    "Referer": "https://www.capitoltrades.com/",
+})
 
 # ---- MotherDuck ----
 con = duckdb.connect(f"md:{DB_NAME}?motherduck_token={MD_TOKEN}")
@@ -61,13 +63,8 @@ con.execute("""
 """)
 
 # ---- 1. Stocks via yfinance ----
-# Strategy: per-ticker fetch with a UA-bearing session, small jitter between calls.
-# (Batch download has been flaky in recent yfinance versions; per-ticker is slower
-# but far more reliable in CI.)
 print(f"Fetching {len(TICKERS)} tickers from yfinance...")
-
-failed = []
-ok = 0
+failed, ok = [], 0
 for i, orig in enumerate(TICKERS, 1):
     yfs = yf_symbol(orig)
     try:
@@ -98,23 +95,49 @@ for i, orig in enumerate(TICKERS, 1):
     except Exception as e:
         failed.append((orig, str(e)))
         print(f"  {orig} FAILED: {e}", file=sys.stderr)
-    time.sleep(0.3)  # be polite, avoid Yahoo throttling
+    time.sleep(0.3)
 
 print(f"stocks: {ok}/{len(TICKERS)} ok, {len(failed)} failed")
 
-# ---- 2. Congressional trades: House + Senate Stock Watcher ----
-for source, url in (("house", HSW_URL), ("senate", SSW_URL)):
-    try:
-        r = session.get(url, timeout=120)
-        r.raise_for_status()
-        trades = r.json()
-        con.execute(
-            "INSERT INTO bronze.raw_congress_trades VALUES (?, ?, ?);",
-            [source, RUN_TS, json.dumps(trades)],
+# ---- 2. Congressional trades via Capitol Trades backend API ----
+# Paginate from most-recent backwards; stop after we've covered ~45 days of trades.
+# pageSize=96 is what their UI uses; date strings are ISO so lexicographic compare is safe.
+def fetch_capitoltrades(days_back=45, max_pages=60):
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)).date().isoformat()
+    out = []
+    for page in range(1, max_pages + 1):
+        r = session.get(
+            CT_URL,
+            params={"page": page, "pageSize": 96, "sortBy": "-pubDate"},
+            timeout=60,
         )
-        print(f"{source}: {len(trades)} trades ok")
-    except Exception as e:
-        print(f"{source} FAILED: {e}", file=sys.stderr)
+        r.raise_for_status()
+        body = r.json()
+        trades = body.get("data", [])
+        if not trades:
+            break
+        out.extend(trades)
+
+        # Stop once the page's youngest trade is older than the cutoff
+        dates = [t.get("txDate") or t.get("filingDate") for t in trades]
+        dates = [d for d in dates if d]
+        if dates and max(dates) < cutoff:
+            break
+        time.sleep(0.4)
+    return out
+
+try:
+    trades = fetch_capitoltrades()
+    # Log one example record so we can verify the shape in the run log
+    if trades:
+        print("sample trade keys:", sorted(trades[0].keys()))
+    con.execute(
+        "INSERT INTO bronze.raw_congress_trades VALUES (?, ?, ?);",
+        ["capitoltrades", RUN_TS, json.dumps(trades)],
+    )
+    print(f"capitoltrades: {len(trades)} trades ok")
+except Exception as e:
+    print(f"capitoltrades FAILED: {e}", file=sys.stderr)
 
 con.close()
 

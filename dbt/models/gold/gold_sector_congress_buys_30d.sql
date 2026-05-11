@@ -6,8 +6,7 @@
 with buys as (
     select *
     from {{ ref('silver_congress_trades') }}
-    where lower(txn_type) like 'purchase%'   -- "Purchase", "Purchase (Partial)"
-       or lower(txn_type) like 'buy%'
+    where txn_type = 'buy'   -- Capitol Trades uses lowercase 'buy' / 'sell' / 'exchange'
 )
 
 select

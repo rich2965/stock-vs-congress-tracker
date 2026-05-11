@@ -7,8 +7,8 @@ End-to-end pipeline: Python extraction → MotherDuck (Bronze/Silver/Gold) → d
 ```
 yfinance              ─┐
                        ├─► fetch_market_data.py ─► MotherDuck.bronze.*  (append-only JSON)
-House Stock Watcher    │                                  │
-Senate Stock Watcher  ─┘                                  ▼
+Capitol Trades API    ─┘                                  │
+                                                          ▼
                                                   dbt silver  (cleaned, sector-joined, deduped)
                                                           │
                                                           ▼
@@ -19,6 +19,19 @@ Senate Stock Watcher  ─┘                                  ▼
 ```
 
 All sources are free / public, no API keys required.
+
+### Scaffolding Evidence (one-time)
+
+The workflow auto-skips the Evidence build/deploy steps until `evidence/package.json` exists. To set it up:
+
+```bash
+npx degit evidence-dev/template evidence
+cd evidence
+npm install
+# add a MotherDuck source in evidence/sources/ (see Evidence docs)
+```
+
+Commit the `evidence/` folder and the next workflow run will build and publish to `gh-pages`.
 
 ## Deploy
 
