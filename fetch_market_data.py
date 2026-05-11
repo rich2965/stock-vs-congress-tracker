@@ -120,40 +120,73 @@ def scrape_capitoltrades(days_back=45, max_pages=60):
         for pg in range(1, max_pages + 1):
             url = f"https://www.capitoltrades.com/trades?pageSize=96&page={pg}"
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                page.wait_for_selector("table tbody tr", timeout=25000)
+                page.goto(url, wait_until="networkidle", timeout=60000)
+                # Give the table time to hydrate; the row count grows as data streams in
+                page.wait_for_selector("a[href^='/politicians/']", timeout=30000)
+                time.sleep(2)
             except Exception as e:
                 print(f"  page {pg} load failed: {e}", file=sys.stderr)
                 break
 
+            # Extract trades by finding the politician links and walking up to their row container.
+            # This works regardless of whether Capitol Trades uses <table> or <div> for layout.
             rows = page.evaluate("""() => {
-                return Array.from(document.querySelectorAll('table tbody tr')).map(tr => {
-                    const cells = Array.from(tr.querySelectorAll('td'));
-                    // Per cell: split innerText by newlines so multiline labels are preserved
-                    const text = cells.map(td => td.innerText.split('\\n').map(s => s.trim()).filter(Boolean));
-                    // Also pull any ticker links (Issuer cell usually has an <a href="/stocks/XYZ">)
-                    const tickerEl = tr.querySelector('a[href^="/stocks/"]');
-                    const ticker = tickerEl ? tickerEl.getAttribute('href').split('/').pop() : null;
-                    return { text, ticker };
+                // Each row contains exactly one /politicians/ link in the first cell
+                const polLinks = document.querySelectorAll('a[href^="/politicians/"]');
+                const seen = new Set();
+                const out = [];
+                polLinks.forEach(link => {
+                    // Walk up until we find a container that has multiple children (the row)
+                    let row = link;
+                    for (let i = 0; i < 8; i++) {
+                        row = row.parentElement;
+                        if (!row) return;
+                        // Row containers have ~9 cells/children
+                        const children = row.children;
+                        if (children.length >= 6 && children.length <= 14) break;
+                    }
+                    if (!row || seen.has(row)) return;
+                    seen.add(row);
+                    // Per child cell, capture text lines
+                    const cells = Array.from(row.children).map(cell =>
+                        cell.innerText.split('\\n').map(s => s.trim()).filter(Boolean)
+                    );
+                    const tickerEl = row.querySelector('a[href^="/stocks/"]');
+                    const ticker = tickerEl ? tickerEl.getAttribute('href').split('/').pop().toUpperCase() : null;
+                    const politician = link.getAttribute('href').split('/').pop();
+                    out.push({ politician_slug: politician, ticker, text: cells });
                 });
+                return out;
             }""")
+
+            # On first iteration, dump diagnostic info if we got nothing useful
+            if pg == 1 and len(rows) < 3:
+                diag = page.evaluate("""() => ({
+                    title: document.title,
+                    polLinks: document.querySelectorAll('a[href^=\"/politicians/\"]').length,
+                    stockLinks: document.querySelectorAll('a[href^=\"/stocks/\"]').length,
+                    tables: document.querySelectorAll('table').length,
+                    bodyPreview: document.body.innerText.slice(0, 500),
+                })""")
+                print(f"  DIAG page 1: {json.dumps(diag)[:800]}", file=sys.stderr)
+
             if not rows:
                 break
             all_rows.extend(rows)
 
-            # Stop once the most recent "Traded" date on this page is older than cutoff
-            # text[3][0] is the Traded date string
+            # Try to find a "Traded" date in each row (search cells for "DD Mon YYYY" pattern)
             page_dates = []
             for r in rows:
-                try:
-                    d = parse_traded_date(r["text"][3][0])
-                    if d: page_dates.append(d)
-                except Exception:
-                    pass
+                for cell in r["text"]:
+                    for line in cell:
+                        d = parse_traded_date(line)
+                        if d:
+                            page_dates.append(d)
+                            break
             if page_dates and max(page_dates) < cutoff_iso:
                 print(f"  stopped at page {pg}: all trades older than {cutoff_iso}")
                 break
-            time.sleep(0.4)
+            time.sleep(0.5)
         browser.close()
     return all_rows
 

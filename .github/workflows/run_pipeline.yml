@@ -77,8 +77,9 @@ jobs:
         working-directory: evidence
         env:
           # Override the placeholder in evidence/sources/stock_tracker/connection.yaml
-          # with a real MotherDuck connection string.
           EVIDENCE_SOURCE__stock_tracker__filename: "md:stock_tracker?motherduck_token=${{ secrets.MOTHERDUCK_TOKEN }}"
+          # GitHub Pages serves under /<repo-name>/, so assets need that base path
+          BASE_PATH: "/${{ github.event.repository.name }}"
         run: |
           npm ci
           npm run sources
