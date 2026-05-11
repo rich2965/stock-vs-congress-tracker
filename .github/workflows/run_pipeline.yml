@@ -17,9 +17,11 @@ jobs:
     env:
       MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
       DBT_PROFILES_DIR: ${{ github.workspace }}/dbt
+      # Opt every JS action into Node.js 24 (Node 20 is deprecated June 2026)
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v5
         with:
