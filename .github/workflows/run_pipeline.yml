@@ -41,6 +41,7 @@ jobs:
       - name: dbt deps + seed + build
         working-directory: dbt
         run: |
+          dbt deps
           dbt seed --target prod
           dbt build --target prod --fail-fast
 

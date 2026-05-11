@@ -3,7 +3,7 @@ fetch_market_data.py
 Extracts hourly OHLCV (yfinance) + Congressional trades (House + Senate Stock Watcher S3)
 and lands raw JSON into MotherDuck bronze tables (append-only).
 """
-import os, json, sys
+import os, json, sys, time
 from datetime import datetime, timezone
 import requests
 import yfinance as yf
@@ -12,6 +12,9 @@ import duckdb
 # ---- Config ----
 MD_TOKEN = os.environ["MOTHERDUCK_TOKEN"]
 DB_NAME  = os.environ.get("MD_DATABASE", "stock_tracker")
+
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
 TICKERS = [
     "NVDA","AAPL","MSFT","AVGO","CRM","ORCL","ADBE","AMD","CSCO","INTC",
@@ -27,7 +30,6 @@ TICKERS = [
     "LIN","FCX","SHW","APD","ECL","NEM","DOW","NUE","CTVA","VMC",
 ]
 
-# yfinance uses "-" instead of "." for share classes (BRK.B -> BRK-B)
 def yf_symbol(s): return s.replace(".", "-")
 
 HSW_URL = "https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json"
@@ -35,7 +37,11 @@ SSW_URL = "https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregat
 
 RUN_TS = datetime.now(timezone.utc).isoformat()
 
-# ---- Connect ----
+# ---- HTTP session shared by yfinance + S3 fetches ----
+session = requests.Session()
+session.headers.update({"User-Agent": UA, "Accept": "*/*"})
+
+# ---- MotherDuck ----
 con = duckdb.connect(f"md:{DB_NAME}?motherduck_token={MD_TOKEN}")
 con.execute("CREATE SCHEMA IF NOT EXISTS bronze;")
 con.execute("""
@@ -53,26 +59,20 @@ con.execute("""
     );
 """)
 
-# ---- 1. Stocks via yfinance (one batched download, no rate limit headaches) ----
-yf_tickers = [yf_symbol(t) for t in TICKERS]
-print(f"Fetching {len(yf_tickers)} tickers from yfinance...")
-
-df = yf.download(
-    tickers=yf_tickers,
-    period="1mo",
-    interval="1h",
-    group_by="ticker",
-    auto_adjust=False,
-    threads=True,
-    progress=False,
-)
+# ---- 1. Stocks via yfinance ----
+# Strategy: per-ticker fetch with a UA-bearing session, small jitter between calls.
+# (Batch download has been flaky in recent yfinance versions; per-ticker is slower
+# but far more reliable in CI.)
+print(f"Fetching {len(TICKERS)} tickers from yfinance...")
 
 failed = []
-for orig, yfs in zip(TICKERS, yf_tickers):
+ok = 0
+for i, orig in enumerate(TICKERS, 1):
+    yfs = yf_symbol(orig)
     try:
-        # When multiple tickers requested, df has a multi-index column [ticker, field]
-        sub = df[yfs].dropna(how="all") if yfs in df.columns.get_level_values(0) else None
-        if sub is None or sub.empty:
+        t = yf.Ticker(yfs, session=session)
+        hist = t.history(period="1mo", interval="1h", auto_adjust=False, raise_errors=False)
+        if hist is None or hist.empty:
             failed.append(orig); continue
 
         bars = [
@@ -84,23 +84,27 @@ for orig, yfs in zip(TICKERS, yf_tickers):
                 "close":  None if (v := row["Close"])  != v else float(v),
                 "volume": None if (v := row["Volume"]) != v else int(v),
             }
-            for idx, row in sub.iterrows()
+            for idx, row in hist.iterrows()
         ]
         payload = {"symbol": orig, "interval": "1h", "bars": bars}
         con.execute(
             "INSERT INTO bronze.raw_stock_prices VALUES (?, ?, ?);",
             [orig, RUN_TS, json.dumps(payload)],
         )
+        ok += 1
+        if i % 10 == 0:
+            print(f"  {i}/{len(TICKERS)} done ({ok} ok, {len(failed)} failed)")
     except Exception as e:
         failed.append((orig, str(e)))
         print(f"  {orig} FAILED: {e}", file=sys.stderr)
+    time.sleep(0.3)  # be polite, avoid Yahoo throttling
 
-print(f"stocks: {len(TICKERS)-len(failed)}/{len(TICKERS)} ok")
+print(f"stocks: {ok}/{len(TICKERS)} ok, {len(failed)} failed")
 
 # ---- 2. Congressional trades: House + Senate Stock Watcher ----
 for source, url in (("house", HSW_URL), ("senate", SSW_URL)):
     try:
-        r = requests.get(url, timeout=120)
+        r = session.get(url, timeout=120)
         r.raise_for_status()
         trades = r.json()
         con.execute(
@@ -114,6 +118,6 @@ for source, url in (("house", HSW_URL), ("senate", SSW_URL)):
 con.close()
 
 if failed:
-    print(f"\n{len(failed)} ticker(s) failed:")
-    for f in failed:
+    print(f"\nFailed tickers ({len(failed)}):")
+    for f in failed[:20]:
         print(f"  {f}")
