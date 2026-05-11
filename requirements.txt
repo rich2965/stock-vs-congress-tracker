@@ -1,6 +1,7 @@
 requests==2.32.3
 yfinance==0.2.50
 pandas==2.2.3
-duckdb>=1.5.2
 dbt-core>=1.9.0
 dbt-duckdb>=1.9.0
+# duckdb is pinned by dbt-duckdb; we force-upgrade it in the workflow
+# to satisfy MotherDuck's minimum (>= 1.5.2).

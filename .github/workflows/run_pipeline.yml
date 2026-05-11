@@ -29,7 +29,11 @@ jobs:
           cache: pip
 
       - name: Install deps
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          # MotherDuck requires duckdb >= 1.5.2; dbt-duckdb still pins an older
+          # duckdb transitively, so force-upgrade it after the main install.
+          pip install --upgrade 'duckdb>=1.5.2'
 
       - name: Extract (bronze)
         run: python fetch_market_data.py
