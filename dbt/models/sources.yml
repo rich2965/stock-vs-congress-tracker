@@ -6,13 +6,14 @@ sources:
     schema: bronze
     tables:
       - name: raw_stock_prices
-        description: "Append-only raw Alpha Vantage payloads. One row per (symbol, extracted_at)."
+        description: "Append-only raw yfinance payloads. One row per (symbol, extracted_at); payload = {bars: [...]}."
         columns:
           - name: symbol
           - name: extracted_at
           - name: payload
       - name: raw_congress_trades
-        description: "Append-only raw Quiver Quant congressional trade dumps."
+        description: "Append-only House + Senate Stock Watcher dumps. One row per (source, extracted_at)."
         columns:
+          - name: source
           - name: extracted_at
           - name: payload

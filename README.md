@@ -5,33 +5,32 @@ End-to-end pipeline: Python extraction → MotherDuck (Bronze/Silver/Gold) → d
 ## Architecture
 
 ```
-Alpha Vantage ─┐
-               ├─► fetch_market_data.py ─► MotherDuck.bronze.*  (append-only JSON)
-Quiver Quant  ─┘                                 │
-                                                 ▼
-                                         dbt silver  (cleaned, sector-joined, deduped)
-                                                 │
-                                                 ▼
-                                         dbt gold   (sector hourly perf, 30d congress buys)
-                                                 │
-                                                 ▼
-                                         Evidence.dev  → GitHub Pages
+yfinance              ─┐
+                       ├─► fetch_market_data.py ─► MotherDuck.bronze.*  (append-only JSON)
+House Stock Watcher    │                                  │
+Senate Stock Watcher  ─┘                                  ▼
+                                                  dbt silver  (cleaned, sector-joined, deduped)
+                                                          │
+                                                          ▼
+                                                  dbt gold   (sector hourly perf, 30d congress buys)
+                                                          │
+                                                          ▼
+                                                  Evidence.dev  → GitHub Pages
 ```
+
+All sources are free / public, no API keys required.
 
 ## Deploy
 
 1. **MotherDuck**: create a database called `stock_tracker`. Grab a service token.
-2. **Repo secrets** (Settings → Secrets and variables → Actions):
-   - `ALPHAVANTAGE_API_KEY`
-   - `QUIVER_API_KEY`
-   - `MOTHERDUCK_TOKEN`
+2. **Repo secret** (Settings → Secrets and variables → Actions): `MOTHERDUCK_TOKEN`.
 3. **Enable GitHub Pages** (Settings → Pages → Source: `gh-pages` branch).
 4. Push. The workflow runs hourly at `:05` and on demand via *Actions → Run workflow*.
 
 Local run:
 ```bash
 pip install -r requirements.txt
-export ALPHAVANTAGE_API_KEY=... QUIVER_API_KEY=... MOTHERDUCK_TOKEN=...
+export MOTHERDUCK_TOKEN=...
 python fetch_market_data.py
 cd dbt && dbt deps && dbt seed && dbt build
 ```
@@ -65,5 +64,7 @@ cd dbt && dbt deps && dbt seed && dbt build
 ## Notes
 
 - Market caps in `gold_sector_hourly_perf` are a static CTE — refresh quarterly or wire to a `dim_securities` source.
-- Alpha Vantage free tier is the bottleneck (110 tickers ÷ 5/min ≈ 22 min). For premium, drop the `time.sleep(13)` in `fetch_market_data.py`.
+- yfinance pulls `period=1mo`, `interval=1h` per run. Hourly bars are only available for the trailing ~730 days from Yahoo, which is fine here.
+- `BRK.B` is normalized to `BRK-B` when calling Yahoo (yfinance share-class convention).
 - `DRE` (Real Estate) merged into Prologis in 2022 — leaving the seed entry as a placeholder; expect null prices for that ticker.
+- House + Senate Stock Watcher are static S3 dumps refreshed by the maintainers; nothing to authenticate.

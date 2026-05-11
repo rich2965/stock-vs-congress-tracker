@@ -1,16 +1,15 @@
 """
 fetch_market_data.py
-Extracts hourly OHLCV (Alpha Vantage) + Congressional trades (Quiver Quant)
+Extracts hourly OHLCV (yfinance) + Congressional trades (House + Senate Stock Watcher S3)
 and lands raw JSON into MotherDuck bronze tables (append-only).
 """
-import os, json, time, sys
+import os, json, sys
 from datetime import datetime, timezone
 import requests
+import yfinance as yf
 import duckdb
 
 # ---- Config ----
-AV_KEY   = os.environ["ALPHAVANTAGE_API_KEY"]
-QQ_KEY   = os.environ["QUIVER_API_KEY"]
 MD_TOKEN = os.environ["MOTHERDUCK_TOKEN"]
 DB_NAME  = os.environ.get("MD_DATABASE", "stock_tracker")
 
@@ -28,31 +27,15 @@ TICKERS = [
     "LIN","FCX","SHW","APD","ECL","NEM","DOW","NUE","CTVA","VMC",
 ]
 
+# yfinance uses "-" instead of "." for share classes (BRK.B -> BRK-B)
+def yf_symbol(s): return s.replace(".", "-")
+
+HSW_URL = "https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json"
+SSW_URL = "https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregate/all_transactions.json"
+
 RUN_TS = datetime.now(timezone.utc).isoformat()
 
-# ---- Helpers ----
-def get_av_hourly(symbol: str) -> dict:
-    """Alpha Vantage TIME_SERIES_INTRADAY 60min."""
-    url = "https://www.alphavantage.co/query"
-    params = {
-        "function": "TIME_SERIES_INTRADAY",
-        "symbol": symbol,
-        "interval": "60min",
-        "outputsize": "compact",   # last ~100 bars; keeps payload small
-        "apikey": AV_KEY,
-    }
-    r = requests.get(url, params=params, timeout=30)
-    r.raise_for_status()
-    return r.json()
-
-def get_qq_congress() -> list:
-    """Quiver Quant: recent congressional trades (all members)."""
-    url = "https://api.quiverquant.com/beta/live/congresstrading"
-    r = requests.get(url, headers={"Authorization": f"Bearer {QQ_KEY}"}, timeout=60)
-    r.raise_for_status()
-    return r.json()
-
-# ---- Connect to MotherDuck ----
+# ---- Connect ----
 con = duckdb.connect(f"md:{DB_NAME}?motherduck_token={MD_TOKEN}")
 con.execute("CREATE SCHEMA IF NOT EXISTS bronze;")
 con.execute("""
@@ -64,44 +47,73 @@ con.execute("""
 """)
 con.execute("""
     CREATE TABLE IF NOT EXISTS bronze.raw_congress_trades (
+        source VARCHAR,
         extracted_at TIMESTAMPTZ,
         payload JSON
     );
 """)
 
-# ---- Stocks: Alpha Vantage free tier ~5 req/min, 500/day ----
-# Loop tickers, respect rate limit, append-only.
+# ---- 1. Stocks via yfinance (one batched download, no rate limit headaches) ----
+yf_tickers = [yf_symbol(t) for t in TICKERS]
+print(f"Fetching {len(yf_tickers)} tickers from yfinance...")
+
+df = yf.download(
+    tickers=yf_tickers,
+    period="1mo",
+    interval="1h",
+    group_by="ticker",
+    auto_adjust=False,
+    threads=True,
+    progress=False,
+)
+
 failed = []
-for i, sym in enumerate(TICKERS, 1):
+for orig, yfs in zip(TICKERS, yf_tickers):
     try:
-        data = get_av_hourly(sym)
-        # Skip throttled/empty responses but still log
-        if "Time Series (60min)" not in data:
-            failed.append((sym, data.get("Note") or data.get("Information") or "no_data"))
+        # When multiple tickers requested, df has a multi-index column [ticker, field]
+        sub = df[yfs].dropna(how="all") if yfs in df.columns.get_level_values(0) else None
+        if sub is None or sub.empty:
+            failed.append(orig); continue
+
+        bars = [
+            {
+                "ts": idx.isoformat(),
+                "open":   None if (v := row["Open"])   != v else float(v),
+                "high":   None if (v := row["High"])   != v else float(v),
+                "low":    None if (v := row["Low"])    != v else float(v),
+                "close":  None if (v := row["Close"])  != v else float(v),
+                "volume": None if (v := row["Volume"]) != v else int(v),
+            }
+            for idx, row in sub.iterrows()
+        ]
+        payload = {"symbol": orig, "interval": "1h", "bars": bars}
         con.execute(
             "INSERT INTO bronze.raw_stock_prices VALUES (?, ?, ?);",
-            [sym, RUN_TS, json.dumps(data)],
+            [orig, RUN_TS, json.dumps(payload)],
         )
-        print(f"[{i}/{len(TICKERS)}] {sym} ok")
     except Exception as e:
-        failed.append((sym, str(e)))
-        print(f"[{i}/{len(TICKERS)}] {sym} FAILED: {e}", file=sys.stderr)
-    time.sleep(13)   # ~5 req/min ceiling for free tier; tune if premium
+        failed.append((orig, str(e)))
+        print(f"  {orig} FAILED: {e}", file=sys.stderr)
 
-# ---- Congressional trades ----
-try:
-    trades = get_qq_congress()
-    con.execute(
-        "INSERT INTO bronze.raw_congress_trades VALUES (?, ?);",
-        [RUN_TS, json.dumps(trades)],
-    )
-    print(f"congress trades ok ({len(trades)} rows)")
-except Exception as e:
-    print(f"congress trades FAILED: {e}", file=sys.stderr)
+print(f"stocks: {len(TICKERS)-len(failed)}/{len(TICKERS)} ok")
+
+# ---- 2. Congressional trades: House + Senate Stock Watcher ----
+for source, url in (("house", HSW_URL), ("senate", SSW_URL)):
+    try:
+        r = requests.get(url, timeout=120)
+        r.raise_for_status()
+        trades = r.json()
+        con.execute(
+            "INSERT INTO bronze.raw_congress_trades VALUES (?, ?, ?);",
+            [source, RUN_TS, json.dumps(trades)],
+        )
+        print(f"{source}: {len(trades)} trades ok")
+    except Exception as e:
+        print(f"{source} FAILED: {e}", file=sys.stderr)
 
 con.close()
 
 if failed:
-    print(f"\n{len(failed)} ticker(s) failed/throttled:")
-    for s, msg in failed:
-        print(f"  {s}: {msg}")
+    print(f"\n{len(failed)} ticker(s) failed:")
+    for f in failed:
+        print(f"  {f}")

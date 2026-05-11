@@ -1,60 +1,73 @@
--- Flatten Quiver Quant array payload, dedup by natural key, join sector,
--- and model the 45-day STOCK Act disclosure lag explicitly.
+-- Flatten House + Senate Stock Watcher arrays into a unified trade fact.
+-- Schemas differ slightly: House uses "representative", Senate uses "senator".
+-- Both expose: transaction_date, disclosure_date, ticker, type, amount, owner.
 
 {{ config(materialized='table') }}
 
 with raw as (
-    select
-        extracted_at,
-        unnest(cast(payload as json[])) as trade
+    select source, extracted_at, payload
     from {{ source('bronze', 'raw_congress_trades') }}
+),
+
+exploded as (
+    select
+        r.source,
+        r.extracted_at,
+        unnest(cast(r.payload as json[])) as trade
+    from raw r
 ),
 
 parsed as (
     select
-        cast(trade ->> 'Representative' as varchar) as representative,
-        cast(trade ->> 'Ticker'         as varchar) as ticker,
-        cast(trade ->> 'Transaction'    as varchar) as txn_type,
-        cast(trade ->> 'Range'          as varchar) as txn_range,
-        cast(trade ->> 'TradeDate'      as date)    as trade_date,
-        cast(trade ->> 'ReportDate'     as date)    as report_date,
+        source,
+        coalesce(trade ->> 'representative', trade ->> 'senator') as member,
+        upper(trade ->> 'ticker')                                  as ticker,
+        trade ->> 'type'                                           as txn_type,
+        trade ->> 'amount'                                         as txn_amount,
+        trade ->> 'owner'                                          as owner,
+        try_cast(trade ->> 'transaction_date' as date)             as trade_date,
+        try_cast(trade ->> 'disclosure_date'  as date)             as report_date,
         extracted_at
-    from raw
+    from exploded
+    -- Filter junk tickers (HSW has "--", "N/A", empty strings)
+    where trade ->> 'ticker' is not null
+      and trade ->> 'ticker' not in ('--', 'N/A', '')
 ),
 
+-- Dedup on natural key; keep latest extraction
 deduped as (
-    select *
-    from (
+    select * exclude (rn) from (
         select *,
                row_number() over (
-                   partition by representative, ticker, trade_date, txn_type, txn_range
+                   partition by source, member, ticker, trade_date, txn_type, txn_amount
                    order by extracted_at desc
                ) as rn
         from parsed
-    )
-    where rn = 1
+    ) where rn = 1
 ),
 
--- Parse range strings like "$1,001 - $15,000" into numeric bounds; use midpoint as estimate.
+-- Parse "$1,001 - $15,000" → low/high/midpoint
 sized as (
     select
         *,
-        try_cast(replace(replace(split_part(txn_range, '-', 1), '$', ''), ',', '') as double) as range_low,
-        try_cast(replace(replace(split_part(txn_range, '-', 2), '$', ''), ',', '') as double) as range_high
+        try_cast(replace(replace(trim(split_part(txn_amount, '-', 1)), '$',''),',','') as double) as range_low,
+        try_cast(replace(replace(trim(split_part(txn_amount, '-', 2)), '$',''),',','') as double) as range_high
     from deduped
 ),
 
 sectors as (select ticker, sector from {{ ref('dim_sectors') }})
 
 select
-    s.representative,
+    s.source,
+    s.member,
     s.ticker,
     sec.sector,
+    s.owner,
     s.txn_type,
     s.trade_date,
     s.report_date,
     date_diff('day', s.trade_date, s.report_date) as disclosure_lag_days,
-    -- STOCK Act allows up to 45 days; flag late filings.
+    -- STOCK Act gives members 45 days; flag late filings
     case when date_diff('day', s.trade_date, s.report_date) > 45 then true else false end as is_late_disclosure,
     s.range_low,
     s.range_high,
@@ -62,3 +75,4 @@ select
     s.extracted_at
 from sized s
 left join sectors sec on sec.ticker = s.ticker
+where s.trade_date is not null

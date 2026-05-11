@@ -15,10 +15,8 @@ jobs:
     timeout-minutes: 45
 
     env:
-      ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
-      QUIVER_API_KEY:       ${{ secrets.QUIVER_API_KEY }}
-      MOTHERDUCK_TOKEN:     ${{ secrets.MOTHERDUCK_TOKEN }}
-      DBT_PROFILES_DIR:     ${{ github.workspace }}/dbt
+      MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+      DBT_PROFILES_DIR: ${{ github.workspace }}/dbt
 
     steps:
       - uses: actions/checkout@v4

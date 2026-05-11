@@ -1,54 +1,43 @@
--- Unnest Alpha Vantage JSON into a tidy hourly OHLCV fact, deduped, joined to sector.
--- Hardcoded market cap weights live in a CTE for simplicity (refresh quarterly).
+-- Unnest the yfinance bars array into a tidy hourly OHLCV fact, deduped, joined to sector.
 
 {{ config(materialized='table') }}
 
 with raw as (
-    select
-        symbol,
-        extracted_at,
-        payload
+    select symbol, extracted_at, payload
     from {{ source('bronze', 'raw_stock_prices') }}
 ),
 
--- Explode the "Time Series (60min)" object into rows
+-- Explode the "bars" array. Each element: {ts, open, high, low, close, volume}
 exploded as (
     select
         r.symbol,
         r.extracted_at,
-        unnest(json_keys(r.payload -> '$."Time Series (60min)"')) as bar_ts_str,
-        r.payload as p
+        unnest(cast(r.payload -> '$.bars' as json[])) as bar
     from raw r
-    where r.payload -> '$."Time Series (60min)"' is not null
 ),
 
 parsed as (
     select
         symbol,
-        cast(bar_ts_str as timestamp) as bar_ts,
-        cast(p -> ('$."Time Series (60min)"."' || bar_ts_str || '"."1. open"')   as double) as open,
-        cast(p -> ('$."Time Series (60min)"."' || bar_ts_str || '"."2. high"')   as double) as high,
-        cast(p -> ('$."Time Series (60min)"."' || bar_ts_str || '"."3. low"')    as double) as low,
-        cast(p -> ('$."Time Series (60min)"."' || bar_ts_str || '"."4. close"')  as double) as close,
-        cast(p -> ('$."Time Series (60min)"."' || bar_ts_str || '"."5. volume"') as bigint) as volume,
+        cast(bar ->> 'ts' as timestamp) as bar_ts,
+        cast(bar ->> 'open'   as double) as open,
+        cast(bar ->> 'high'   as double) as high,
+        cast(bar ->> 'low'    as double) as low,
+        cast(bar ->> 'close'  as double) as close,
+        cast(bar ->> 'volume' as bigint) as volume,
         extracted_at
     from exploded
 ),
 
--- Dedup: keep latest extraction per (symbol, bar_ts)
+-- Keep latest extraction per (symbol, bar_ts)
 deduped as (
-    select *
-    from (
-        select *,
-               row_number() over (partition by symbol, bar_ts order by extracted_at desc) as rn
+    select * exclude (rn) from (
+        select *, row_number() over (partition by symbol, bar_ts order by extracted_at desc) as rn
         from parsed
-    )
-    where rn = 1
+    ) where rn = 1
 ),
 
-sectors as (
-    select ticker, sector from {{ ref('dim_sectors') }}
-)
+sectors as (select ticker, sector from {{ ref('dim_sectors') }})
 
 select
     d.symbol,
@@ -58,3 +47,4 @@ select
     d.extracted_at
 from deduped d
 left join sectors s on s.ticker = d.symbol
+where d.close is not null
