@@ -1,0 +1,4 @@
+name: stock_tracker
+type: duckdb
+options:
+  filename: "md:stock_tracker?motherduck_token=placeholder"

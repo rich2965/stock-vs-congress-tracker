@@ -1,56 +1,54 @@
 ---
-title: Welcome to Evidence
+title: Sector Performance vs. Political Trades
 ---
 
-<Details title='How to edit this page'>
+## Hourly sector performance (last 24h)
 
-  This page can be found in your project at `/pages/index.md`. Make a change to the markdown file and save it to see the change take effect in your browser.
-</Details>
-
-```sql categories
-  select
-      category
-  from needful_things.orders
-  group by category
+```sql sector_perf
+select
+  bar_ts,
+  sector,
+  sector_pct_change * 100 as pct_change
+from stock_tracker.gold.gold_sector_hourly_perf
+where bar_ts >= current_timestamp - interval '24 hours'
+order by bar_ts
 ```
 
-<Dropdown data={categories} name=category value=category>
-    <DropdownOption value="%" valueLabel="All Categories"/>
-</Dropdown>
+<LineChart
+  data={sector_perf}
+  x=bar_ts
+  y=pct_change
+  series=sector
+  yAxisTitle="% change"
+/>
 
-<Dropdown name=year>
-    <DropdownOption value=% valueLabel="All Years"/>
-    <DropdownOption value=2019/>
-    <DropdownOption value=2020/>
-    <DropdownOption value=2021/>
-</Dropdown>
+## Congressional buy volume by sector (last 30d)
 
-```sql orders_by_category
-  select 
-      date_trunc('month', order_datetime) as month,
-      sum(sales) as sales_usd,
-      category
-  from needful_things.orders
-  where category like '${inputs.category.value}'
-  and date_part('year', order_datetime) like '${inputs.year.value}'
-  group by all
-  order by sales_usd desc
+```sql buys_30d
+select
+  sector,
+  est_buy_volume_30d_by_report / 1000 as est_buy_volume_30d_k
+from stock_tracker.gold.gold_sector_congress_buys_30d
+order by est_buy_volume_30d_k desc
 ```
 
 <BarChart
-    data={orders_by_category}
-    title="Sales by Month, {inputs.category.label}"
-    x=month
-    y=sales_usd
-    series=category
+  data={buys_30d}
+  x=sector
+  y=est_buy_volume_30d_k
+  yAxisTitle="Est. $ (thousands)"
+  swapXY=true
 />
 
-## What's Next?
-- [Connect your data sources](settings)
-- Edit/add markdown files in the `pages` folder
-- Deploy your project with [Evidence Cloud](https://evidence.dev/cloud)
+## Recent late filings
 
-## Get Support
-- Message us on [Slack](https://slack.evidence.dev/)
-- Read the [Docs](https://docs.evidence.dev/)
-- Open an issue on [Github](https://github.com/evidence-dev/evidence)
+```sql late_filings
+select
+  member, chamber, ticker, sector, trade_date, report_date, disclosure_lag_days
+from stock_tracker.silver.silver_congress_trades
+where is_late_disclosure
+order by report_date desc
+limit 25
+```
+
+<DataTable data={late_filings} />

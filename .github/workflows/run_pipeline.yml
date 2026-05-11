@@ -76,7 +76,9 @@ jobs:
         if: steps.evidence_check.outputs.exists == 'true'
         working-directory: evidence
         env:
-          EVIDENCE_SOURCE__motherduck__token: ${{ secrets.MOTHERDUCK_TOKEN }}
+          # Override the placeholder in evidence/sources/stock_tracker/connection.yaml
+          # with a real MotherDuck connection string.
+          EVIDENCE_SOURCE__stock_tracker__filename: "md:stock_tracker?motherduck_token=${{ secrets.MOTHERDUCK_TOKEN }}"
         run: |
           npm ci
           npm run sources
