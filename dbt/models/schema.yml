@@ -41,5 +41,7 @@ seeds:
     columns:
       - name: ticker
         tests: [not_null, unique]
+      - name: company_name
+        tests: [not_null]
       - name: sector
         tests: [not_null]
