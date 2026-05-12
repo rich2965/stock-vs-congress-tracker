@@ -18,8 +18,4 @@ models:
 seeds:
   stock_tracker:
     +schema: seed
-    dim_sectors:
-      +column_types:
-        ticker: VARCHAR
-        company_name: VARCHAR
-        sector: VARCHAR
+    +quote_columns: true
