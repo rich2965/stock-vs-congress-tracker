@@ -22,7 +22,7 @@ select * from stock_tracker.congress_trades_30d
 ```sql totals
 select
   (select count(distinct sector) from stock_tracker.sector_perf) as sectors_tracked,
-  (select sum(est_buy_volume_30d_k) * 1000 from stock_tracker.buys_30d) as total_buy_volume_usd
+  (select sum(est_trade_value_usd) from stock_tracker.congress_trades_30d where txn_type = 'buy') as total_buy_volume_usd
 ```
 
 <Grid cols=2>
@@ -93,20 +93,38 @@ order by trade_date desc, symbol
 
 ## Congressional buy volume by sector — last 30 days
 
-Estimated USD volume of "buy" trades disclosed by Congress over the last 30 days. Stocks outside our 110-ticker watchlist are bucketed as "Other" so they still surface. Pick sectors to filter.
+Filter sectors and minimum trade size. Stocks outside our tracked watchlist are bucketed as "Other".
 
-<Dropdown
-  name=trade_sectors
-  data={buys_30d}
-  value=sector
-  multiple=true
-  selectAllByDefault=true
-  title="Sectors"
-/>
+<Grid cols=2>
+  <Dropdown
+    name=trade_sectors
+    data={trades_30d}
+    value=sector
+    multiple=true
+    selectAllByDefault=true
+    title="Sectors"
+  />
+  <Dropdown name=min_size title="Min trade size">
+    <DropdownOption value=0        valueLabel="All" />
+    <DropdownOption value=15000    valueLabel="≥ $15K" />
+    <DropdownOption value=50000    valueLabel="≥ $50K" />
+    <DropdownOption value=100000   valueLabel="≥ $100K" />
+    <DropdownOption value=250000   valueLabel="≥ $250K" />
+    <DropdownOption value=1000000  valueLabel="≥ $1M" />
+  </Dropdown>
+</Grid>
 
 ```sql buys_filtered
-select * from ${buys_30d}
-where sector in ${inputs.trade_sectors}
+-- Re-aggregate from individual trades so the bar values reflect the size filter
+select
+  sector,
+  count(*) as n_trades,
+  sum(est_trade_value_usd) / 1000.0 as est_buy_volume_30d_k
+from ${trades_30d}
+where txn_type = 'buy'
+  and sector in ${inputs.trade_sectors}
+  and coalesce(est_trade_value_usd, 0) >= ${inputs.min_size.value}
+group by sector
 order by est_buy_volume_30d_k desc
 ```
 
@@ -121,12 +139,14 @@ order by est_buy_volume_30d_k desc
 />
 
 <Accordion>
-  <AccordionItem title="Show individual trades for selected sectors">
+  <AccordionItem title="Show individual trades for selected filters">
 
 ```sql trades_filtered
 select * from ${trades_30d}
-where sector in ${inputs.trade_sectors}
-order by trade_date desc
+where txn_type = 'buy'
+  and sector in ${inputs.trade_sectors}
+  and coalesce(est_trade_value_usd, 0) >= ${inputs.min_size.value}
+order by est_trade_value_usd desc nulls last, trade_date desc
 ```
 
 <DataTable data={trades_filtered} rows=25 search=true>
@@ -135,7 +155,6 @@ order by trade_date desc
   <Column id=ticker title="Ticker" />
   <Column id=issuer title="Company" />
   <Column id=sector title="Sector" />
-  <Column id=txn_type title="Type" />
   <Column id=trade_date title="Date" />
   <Column id=est_trade_value_usd title="Est. $" fmt=usd0 align=right />
 </DataTable>
