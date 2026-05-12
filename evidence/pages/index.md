@@ -54,7 +54,7 @@ Market-cap-weighted daily % change per sector. Hourly bars compounded into daily
 
 ```sql perf_filtered
 select * from ${sector_perf}
-where sector in ${inputs.perf_sectors}
+where sector in ${inputs.perf_sectors.value}
 order by trade_date
 ```
 
@@ -76,7 +76,7 @@ order by trade_date
 ```sql ticker_filtered
 select symbol, sector, trade_date, close, pct_change
 from ${stock_perf}
-where sector in ${inputs.perf_sectors}
+where sector in ${inputs.perf_sectors.value}
 order by trade_date desc, symbol
 ```
 
@@ -122,7 +122,7 @@ select
   sum(est_trade_value_usd) / 1000.0 as est_buy_volume_30d_k
 from ${trades_30d}
 where txn_type = 'buy'
-  and sector in ${inputs.trade_sectors}
+  and sector in ${inputs.trade_sectors.value}
   and coalesce(est_trade_value_usd, 0) >= ${inputs.min_size.value}
 group by sector
 order by est_buy_volume_30d_k desc
@@ -144,7 +144,7 @@ order by est_buy_volume_30d_k desc
 ```sql trades_filtered
 select * from ${trades_30d}
 where txn_type = 'buy'
-  and sector in ${inputs.trade_sectors}
+  and sector in ${inputs.trade_sectors.value}
   and coalesce(est_trade_value_usd, 0) >= ${inputs.min_size.value}
 order by est_trade_value_usd desc nulls last, trade_date desc
 ```
