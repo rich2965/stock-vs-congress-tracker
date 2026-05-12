@@ -120,7 +120,8 @@ def main():
 
     combined = combined.sort_values("ticker")
     out = Path(__file__).resolve().parent.parent / "dbt" / "seeds" / "dim_sectors.csv"
-    combined.to_csv(out, index=False)
+    import csv as _csv
+    combined.to_csv(out, index=False, quoting=_csv.QUOTE_ALL)
     print(f"\nWrote {len(combined)} tickers → {out}")
     print("\nSector counts:")
     print(combined["sector"].value_counts().to_string())
