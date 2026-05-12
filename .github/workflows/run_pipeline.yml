@@ -76,13 +76,16 @@ jobs:
         if: steps.evidence_check.outputs.exists == 'true'
         working-directory: evidence
         env:
-          # Inject the real MotherDuck token into the motherduck source
+          # Inject the real MotherDuck token into the motherduck source.
+          # (Base path is set in evidence.config.yaml under deployment.basePath —
+          # Evidence v40 doesn't honour any env var override for that.)
           EVIDENCE_SOURCE__stock_tracker__token: ${{ secrets.MOTHERDUCK_TOKEN }}
-          # Evidence + SvelteKit base path for GitHub Pages (/<repo-name>/)
-          BASE: "/${{ github.event.repository.name }}"
         run: |
           npm ci
-          npm run sources
+          # Wipe Evidence's build cache so the new basePath actually takes effect
+          rm -rf .evidence build
+          # Use strict mode so a failed MotherDuck connection fails the run loudly
+          npm run sources:strict
           npm run build
 
       - name: Deploy to GitHub Pages
