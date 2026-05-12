@@ -19,3 +19,9 @@ seeds:
   stock_tracker:
     +schema: seed
     +quote_columns: true
+    # Explicitly define the 3 columns found in your CSV
+    dim_sectors:
+      +column_types:
+        ticker: varchar
+        company_name: varchar
+        sector: varchar
