@@ -52,7 +52,17 @@ jobs:
       - name: dbt deps + seed + build
         working-directory: dbt
         run: |
+          dbt clean                              # 🆕 purge any stale manifests
           dbt deps
+          # 🆕 Debug: check actual CSV header and column count
+          echo "=== CSV header ==="
+          head -1 seeds/dim_sectors.csv
+          echo "=== Column count ==="
+          head -1 seeds/dim_sectors.csv | awk -F',' '{print NF}'
+          # 🆕 Show any dbt config related to dim_sectors
+          echo "=== dbt references to dim_sectors ==="
+          grep -r "dim_sectors" --include="*.yml" --include="*.yaml" .
+          # Continue as before
           dbt seed --target prod
           dbt build --target prod --fail-fast
 
