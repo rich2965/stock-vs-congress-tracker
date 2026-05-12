@@ -1,6 +1,6 @@
 ---
 title: Sector Performance vs. Political Trades
-description: Daily-refreshed view of US sector performance alongside Congressional buying activity.
+description: Daily US sector performance alongside Congressional buying activity, refreshed after market close.
 ---
 
 ```sql sector_perf
@@ -39,52 +39,51 @@ select
   />
 </Grid>
 
-## Hourly sector performance — last 24 hours
+## Daily sector performance — last 30 days
 
-Market-cap-weighted hourly % change per sector. Pick a sector to drill into individual tickers.
+Market-cap-weighted daily % change per sector. Hourly bars compounded into daily returns. Pick one or many sectors.
 
 <Dropdown
-  name=perf_sector
+  name=perf_sectors
   data={sector_perf}
   value=sector
-  defaultValue="%"
-  title="Sector"
->
-  <DropdownOption value="%" valueLabel="All sectors" />
-</Dropdown>
+  multiple=true
+  selectAllByDefault=true
+  title="Sectors"
+/>
 
 ```sql perf_filtered
 select * from ${sector_perf}
-where sector like '${inputs.perf_sector.value}'
-order by bar_ts
+where sector in ${inputs.perf_sectors}
+order by trade_date
 ```
 
 <LineChart
   data={perf_filtered}
-  x=bar_ts
+  x=trade_date
   y=pct_change
   series=sector
   yFmt=pct2
-  xFmt='MMM D ha'
+  xFmt='MMM D'
   yAxisTitle="% change"
   xAxisTitle=""
   chartAreaHeight=320
 />
 
 <Accordion>
-  <AccordionItem title="Show per-ticker breakdown for selected sector">
+  <AccordionItem title="Show per-ticker breakdown for selected sectors">
 
 ```sql ticker_filtered
-select symbol, sector, bar_ts, close, pct_change
+select symbol, sector, trade_date, close, pct_change
 from ${stock_perf}
-where sector like '${inputs.perf_sector.value}'
-order by bar_ts desc, symbol
+where sector in ${inputs.perf_sectors}
+order by trade_date desc, symbol
 ```
 
 <DataTable data={ticker_filtered} rows=20 search=true>
   <Column id=symbol title="Ticker" />
   <Column id=sector title="Sector" />
-  <Column id=bar_ts title="Hour" />
+  <Column id=trade_date title="Date" />
   <Column id=close title="Close" fmt=usd2 align=right />
   <Column id=pct_change title="% change" fmt=pct2 align=right contentType=colorscale colorScale=diverging />
 </DataTable>
@@ -94,21 +93,20 @@ order by bar_ts desc, symbol
 
 ## Congressional buy volume by sector — last 30 days
 
-Estimated USD volume of "buy" trades disclosed by Congress over the last 30 days. Pick a sector to see exactly which trades drove the number — including any stocks outside our 110-ticker watchlist (bucketed as "Other").
+Estimated USD volume of "buy" trades disclosed by Congress over the last 30 days. Stocks outside our 110-ticker watchlist are bucketed as "Other" so they still surface. Pick sectors to filter.
 
 <Dropdown
-  name=trade_sector
+  name=trade_sectors
   data={buys_30d}
   value=sector
-  defaultValue="%"
-  title="Sector"
->
-  <DropdownOption value="%" valueLabel="All sectors" />
-</Dropdown>
+  multiple=true
+  selectAllByDefault=true
+  title="Sectors"
+/>
 
 ```sql buys_filtered
 select * from ${buys_30d}
-where sector like '${inputs.trade_sector.value}'
+where sector in ${inputs.trade_sectors}
 order by est_buy_volume_30d_k desc
 ```
 
@@ -123,11 +121,11 @@ order by est_buy_volume_30d_k desc
 />
 
 <Accordion>
-  <AccordionItem title="Show individual trades for selected sector">
+  <AccordionItem title="Show individual trades for selected sectors">
 
 ```sql trades_filtered
 select * from ${trades_30d}
-where sector like '${inputs.trade_sector.value}'
+where sector in ${inputs.trade_sectors}
 order by trade_date desc
 ```
 
@@ -138,7 +136,7 @@ order by trade_date desc
   <Column id=issuer title="Company" />
   <Column id=sector title="Sector" />
   <Column id=txn_type title="Type" />
-  <Column id=trade_date title="Traded" />
+  <Column id=trade_date title="Date" />
   <Column id=est_trade_value_usd title="Est. $" fmt=usd0 align=right />
 </DataTable>
 
@@ -148,6 +146,6 @@ order by trade_date desc
 ---
 
 <small>
-  Data sources: <a href="https://finance.yahoo.com">Yahoo Finance</a> (hourly OHLCV via yfinance) &middot; <a href="https://www.capitoltrades.com/trades">Capitol Trades</a> (Congressional disclosures, scraped).
+  Data sources: <a href="https://finance.yahoo.com">Yahoo Finance</a> (hourly OHLCV via yfinance, rolled up to daily) &middot; <a href="https://www.capitoltrades.com/trades">Capitol Trades</a> (Congressional disclosures, scraped).
   Pipeline: Python → MotherDuck → dbt → Evidence. Refreshed daily after US market close.
 </small>
