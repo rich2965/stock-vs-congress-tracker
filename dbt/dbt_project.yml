@@ -21,4 +21,5 @@ seeds:
     dim_sectors:
       +column_types:
         ticker: VARCHAR
+        company_name: VARCHAR
         sector: VARCHAR
