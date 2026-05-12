@@ -110,6 +110,35 @@ def parse_traded_date(s: str):
     except Exception:
         return None
 
+# Extractor verified live against capitoltrades.com via DOM inspection.
+# Uses Capitol Trades' own `.q-field.*` CSS classes for clean field access.
+EXTRACT_JS = r"""
+() => {
+  const txt = (root, sel) => root && root.querySelector(sel)?.innerText?.trim() || null;
+  return Array.from(document.querySelectorAll('table tbody tr')).map(tr => {
+    const c = tr.children;
+    const tradeLines = (c[3]?.innerText || '').split('\n').map(s => s.trim()).filter(Boolean);
+    const trade_date_raw = tradeLines.slice(0, 2).join(' ') || null;
+    const ticker = txt(tr, '.q-field.issuer-ticker');
+    const filedMatch = (c[4]?.innerText || '').match(/\d+/);
+    return {
+      politician: txt(c[0], 'a'),
+      party:      txt(tr, '.q-field.party'),
+      chamber:    txt(tr, '.q-field.chamber'),
+      state:      txt(tr, '.q-field.us-state-compact'),
+      issuer:     txt(c[1], 'a'),
+      ticker:     ticker ? ticker.split(':')[0] : null,
+      trade_date_raw,
+      filed_after_days: filedMatch ? parseInt(filedMatch[0], 10) : null,
+      owner:   txt(tr, '.q-field.owner-with-icon'),
+      tx_type: (txt(tr, '.q-field.tx-type') || '').toLowerCase(),
+      size:    txt(tr, '.q-field.trade-size'),
+      price:   c[8]?.innerText?.trim() || null,
+    };
+  });
+}
+"""
+
 def scrape_capitoltrades(days_back=45, max_pages=60):
     cutoff_iso = (datetime.now(timezone.utc) - timedelta(days=days_back)).date().isoformat()
     all_rows = []
@@ -121,68 +150,34 @@ def scrape_capitoltrades(days_back=45, max_pages=60):
             url = f"https://www.capitoltrades.com/trades?pageSize=96&page={pg}"
             try:
                 page.goto(url, wait_until="networkidle", timeout=60000)
-                # Give the table time to hydrate; the row count grows as data streams in
-                page.wait_for_selector("a[href^='/politicians/']", timeout=30000)
-                time.sleep(2)
+                page.wait_for_selector("table tbody tr", timeout=30000)
+                # Brief settle for React hydration
+                page.wait_for_function(
+                    "document.querySelectorAll('table tbody tr').length > 1",
+                    timeout=15000,
+                )
             except Exception as e:
                 print(f"  page {pg} load failed: {e}", file=sys.stderr)
+                if pg == 1:
+                    diag = page.evaluate("""() => ({
+                        title: document.title,
+                        rows: document.querySelectorAll('table tbody tr').length,
+                        bodyPreview: document.body.innerText.slice(0, 400),
+                    })""")
+                    print(f"  DIAG: {json.dumps(diag)}", file=sys.stderr)
                 break
 
-            # Extract trades by finding the politician links and walking up to their row container.
-            # This works regardless of whether Capitol Trades uses <table> or <div> for layout.
-            rows = page.evaluate("""() => {
-                // Each row contains exactly one /politicians/ link in the first cell
-                const polLinks = document.querySelectorAll('a[href^="/politicians/"]');
-                const seen = new Set();
-                const out = [];
-                polLinks.forEach(link => {
-                    // Walk up until we find a container that has multiple children (the row)
-                    let row = link;
-                    for (let i = 0; i < 8; i++) {
-                        row = row.parentElement;
-                        if (!row) return;
-                        // Row containers have ~9 cells/children
-                        const children = row.children;
-                        if (children.length >= 6 && children.length <= 14) break;
-                    }
-                    if (!row || seen.has(row)) return;
-                    seen.add(row);
-                    // Per child cell, capture text lines
-                    const cells = Array.from(row.children).map(cell =>
-                        cell.innerText.split('\\n').map(s => s.trim()).filter(Boolean)
-                    );
-                    const tickerEl = row.querySelector('a[href^="/stocks/"]');
-                    const ticker = tickerEl ? tickerEl.getAttribute('href').split('/').pop().toUpperCase() : null;
-                    const politician = link.getAttribute('href').split('/').pop();
-                    out.push({ politician_slug: politician, ticker, text: cells });
-                });
-                return out;
-            }""")
-
-            # On first iteration, dump diagnostic info if we got nothing useful
-            if pg == 1 and len(rows) < 3:
-                diag = page.evaluate("""() => ({
-                    title: document.title,
-                    polLinks: document.querySelectorAll('a[href^=\"/politicians/\"]').length,
-                    stockLinks: document.querySelectorAll('a[href^=\"/stocks/\"]').length,
-                    tables: document.querySelectorAll('table').length,
-                    bodyPreview: document.body.innerText.slice(0, 500),
-                })""")
-                print(f"  DIAG page 1: {json.dumps(diag)[:800]}", file=sys.stderr)
-
+            rows = page.evaluate(EXTRACT_JS)
             if not rows:
                 break
             all_rows.extend(rows)
 
-            # Try to find a "Traded" date in each row (search cells for "DD Mon YYYY" pattern)
+            # Stop once the page's most-recent trade is older than cutoff
             page_dates = []
             for r in rows:
-                for cell in r["text"]:
-                    for line in cell:
-                        d = parse_traded_date(line)
-                        if d:
-                            page_dates.append(d)
-                            break
+                d = parse_traded_date(r.get("trade_date_raw") or "")
+                if d:
+                    page_dates.append(d)
             if page_dates and max(page_dates) < cutoff_iso:
                 print(f"  stopped at page {pg}: all trades older than {cutoff_iso}")
                 break

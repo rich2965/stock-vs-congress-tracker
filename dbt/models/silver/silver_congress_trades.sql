@@ -1,15 +1,9 @@
--- Parse Capitol Trades scraped rows into a tidy trade fact.
--- Bronze payload = JSON array of {text: [[...cell_lines...], ...], ticker: "NVDA"}
--- Column order observed on capitoltrades.com/trades (left → right):
---   0: Politician (multiline: name / "Republican|Democrat" / "House|Senate")
---   1: Traded Issuer (company / ticker)
---   2: Published date
---   3: Traded date     ("16 Apr 2024")
---   4: Filed after     ("3 days", "45 days", ...)
---   5: Owner
---   6: Type            ("buy" | "sell" | "exchange" | "receive")
---   7: Size            ("1K–15K", "15K–50K", ..., "50M+")
---   8: Price
+-- Capitol Trades scraped trades → tidy fact table.
+-- Bronze payload = JSON array of objects (one per trade row), with fields verified live:
+--   politician, party, chamber, state, issuer, ticker, trade_date_raw ("22 Apr 2026"),
+--   filed_after_days (int), owner, tx_type ('buy'|'sell'|'exchange'), size, price.
+-- report_date is computed as trade_date + filed_after_days (Capitol Trades doesn't expose
+-- the actual filing date in absolute form on the list view — it shows "X days").
 
 {{ config(materialized='table') }}
 
@@ -22,30 +16,27 @@ exploded as (
     select
         r.source,
         r.extracted_at,
-        unnest(cast(r.payload as json[])) as row
+        unnest(cast(r.payload as json[])) as t
     from raw r
 ),
 
 parsed as (
     select
         source,
+        cast(t ->> 'politician' as varchar) as member,
+        lower(cast(t ->> 'party'   as varchar)) as party,
+        lower(cast(t ->> 'chamber' as varchar)) as chamber,
+        cast(t ->> 'state'     as varchar) as state,
+        cast(t ->> 'issuer'    as varchar) as issuer,
+        upper(cast(t ->> 'ticker' as varchar)) as ticker,
 
-        -- Politician cell: line 0 = name, line 1 = party, line 2 = chamber (may vary)
-        cast(row -> '$.text[0][0]' as varchar) as member,
-        lower(cast(row -> '$.text[0][1]' as varchar)) as party,
-        lower(cast(row -> '$.text[0][2]' as varchar)) as chamber,
+        try_strptime(cast(t ->> 'trade_date_raw' as varchar), '%d %b %Y')::date as trade_date,
+        try_cast(t ->> 'filed_after_days' as integer) as disclosure_lag_days,
 
-        -- Ticker comes from the <a href="/stocks/XYZ"> attribute we captured separately
-        upper(coalesce(cast(row -> '$.ticker' as varchar),
-                       cast(row -> '$.text[1][1]' as varchar))) as ticker,
-
-        -- Dates: "16 Apr 2024"
-        try_strptime(cast(row -> '$.text[2][0]' as varchar), '%d %b %Y')::date as report_date,
-        try_strptime(cast(row -> '$.text[3][0]' as varchar), '%d %b %Y')::date as trade_date,
-
-        cast(row -> '$.text[5][0]' as varchar)         as owner,
-        lower(cast(row -> '$.text[6][0]' as varchar))  as txn_type,
-        cast(row -> '$.text[7][0]' as varchar)         as txn_value_band,
+        cast(t ->> 'owner'   as varchar) as owner,
+        lower(cast(t ->> 'tx_type' as varchar)) as txn_type,
+        cast(t ->> 'size'    as varchar) as txn_value_band,
+        cast(t ->> 'price'   as varchar) as price,
 
         extracted_at
     from exploded
@@ -59,7 +50,7 @@ filtered as (
       and trade_date is not null
 ),
 
--- Dedup by natural key (no stable txId from scrape → composite key)
+-- Dedup on natural key
 deduped as (
     select * exclude (rn) from (
         select *,
@@ -71,7 +62,7 @@ deduped as (
     ) where rn = 1
 ),
 
--- Capitol Trades value bands → USD midpoints
+-- Map Capitol Trades size bands → USD midpoints
 sized as (
     select
         *,
@@ -87,7 +78,8 @@ sized as (
             when '25M–50M'   then 37500000
             when '50M+'      then 50000000
             else null
-        end as est_trade_value_usd
+        end as est_trade_value_usd,
+        trade_date + (coalesce(disclosure_lag_days, 0) || ' days')::interval as report_date_calc
     from deduped
 ),
 
@@ -98,16 +90,19 @@ select
     s.member,
     s.chamber,
     s.party,
+    s.state,
+    s.issuer,
     s.ticker,
     sec.sector,
     s.owner,
     s.txn_type,
     s.trade_date,
-    s.report_date,
-    date_diff('day', s.trade_date, s.report_date) as disclosure_lag_days,
-    case when date_diff('day', s.trade_date, s.report_date) > 45 then true else false end as is_late_disclosure,
+    cast(s.report_date_calc as date) as report_date,
+    s.disclosure_lag_days,
+    case when coalesce(s.disclosure_lag_days, 0) > 45 then true else false end as is_late_disclosure,
     s.txn_value_band,
     s.est_trade_value_usd,
+    s.price,
     s.extracted_at
 from sized s
 left join sectors sec on sec.ticker = s.ticker

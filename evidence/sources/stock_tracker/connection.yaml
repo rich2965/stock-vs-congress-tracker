@@ -1,4 +1,5 @@
 name: stock_tracker
-type: duckdb
+type: motherduck
 options:
-  filename: "md:stock_tracker?motherduck_token=placeholder"
+  database: stock_tracker
+  token: placeholder
