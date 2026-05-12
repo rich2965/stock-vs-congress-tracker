@@ -1,1 +1,1 @@
-[{"name":"sector","evidenceType":"string","typeFidelity":"precise"},{"name":"est_buy_volume_30d_k","evidenceType":"number","typeFidelity":"precise"}]
+[{"name":"sector","evidenceType":"string","typeFidelity":"precise"},{"name":"n_trades","evidenceType":"number","typeFidelity":"precise"},{"name":"est_buy_volume_30d_k","evidenceType":"number","typeFidelity":"precise"}]
