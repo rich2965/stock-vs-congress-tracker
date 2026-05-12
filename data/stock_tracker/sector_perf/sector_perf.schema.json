@@ -1,1 +1,1 @@
-[{"name":"bar_ts","evidenceType":"date","typeFidelity":"precise"},{"name":"sector","evidenceType":"string","typeFidelity":"precise"},{"name":"pct_change","evidenceType":"number","typeFidelity":"precise"}]
+[{"name":"trade_date","evidenceType":"date","typeFidelity":"precise"},{"name":"sector","evidenceType":"string","typeFidelity":"precise"},{"name":"pct_change","evidenceType":"number","typeFidelity":"precise"}]
