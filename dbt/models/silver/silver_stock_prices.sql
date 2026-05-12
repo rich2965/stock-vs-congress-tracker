@@ -37,10 +37,11 @@ deduped as (
     ) where rn = 1
 ),
 
-sectors as (select ticker, sector from {{ ref('dim_sectors') }})
+sectors as (select ticker, company_name, sector from {{ ref('dim_sectors') }})
 
 select
     d.symbol,
+    s.company_name,
     s.sector,
     d.bar_ts,
     d.open, d.high, d.low, d.close, d.volume,

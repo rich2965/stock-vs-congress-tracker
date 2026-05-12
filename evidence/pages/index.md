@@ -11,10 +11,6 @@ select * from stock_tracker.sector_perf
 select * from stock_tracker.sector_stock_perf
 ```
 
-```sql buys_30d
-select * from stock_tracker.buys_30d
-```
-
 ```sql trades_30d
 select * from stock_tracker.congress_trades_30d
 ```
@@ -41,7 +37,7 @@ select
 
 ## Daily sector performance — last 30 days
 
-Market-cap-weighted daily % change per sector. Hourly bars compounded into daily returns. Pick one or many sectors.
+Market-cap-weighted daily % change per sector. Hourly bars compounded into daily returns.
 
 <Dropdown
   name=perf_sectors
@@ -73,15 +69,34 @@ order by trade_date
 <Accordion>
   <AccordionItem title="Show per-ticker breakdown for selected sectors">
 
-```sql ticker_filtered
-select symbol, sector, trade_date, close, pct_change
+```sql tickers_in_sectors
+select distinct symbol, company_name
 from ${stock_perf}
 where sector in ${inputs.perf_sectors.value}
+order by symbol
+```
+
+<Dropdown
+  name=perf_tickers
+  data={tickers_in_sectors}
+  value=symbol
+  label=symbol
+  multiple=true
+  selectAllByDefault=true
+  title="Tickers"
+/>
+
+```sql ticker_filtered
+select symbol, company_name, sector, trade_date, close, pct_change, yahoo_url
+from ${stock_perf}
+where sector in ${inputs.perf_sectors.value}
+  and symbol in ${inputs.perf_tickers.value}
 order by trade_date desc, symbol
 ```
 
 <DataTable data={ticker_filtered} rows=20 search=true>
-  <Column id=symbol title="Ticker" />
+  <Column id=yahoo_url title="Ticker" contentType=link linkLabel=symbol openInNewTab=true />
+  <Column id=company_name title="Company" />
   <Column id=sector title="Sector" />
   <Column id=trade_date title="Date" />
   <Column id=close title="Close" fmt=usd2 align=right />
@@ -115,7 +130,6 @@ Filter sectors and minimum trade size. Stocks outside our tracked watchlist are 
 </Grid>
 
 ```sql buys_filtered
--- Re-aggregate from individual trades so the bar values reflect the size filter
 select
   sector,
   count(*) as n_trades,
@@ -152,7 +166,7 @@ order by est_trade_value_usd desc nulls last, trade_date desc
 <DataTable data={trades_filtered} rows=25 search=true>
   <Column id=member title="Member" />
   <Column id=chamber title="Chamber" />
-  <Column id=ticker title="Ticker" />
+  <Column id=yahoo_url title="Ticker" contentType=link linkLabel=ticker openInNewTab=true />
   <Column id=issuer title="Company" />
   <Column id=sector title="Sector" />
   <Column id=trade_date title="Date" />
